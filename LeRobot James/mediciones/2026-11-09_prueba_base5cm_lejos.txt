@@ -1,0 +1,17 @@
+Prueba del 9/11 hecha por Joaco (base de 5 cm). Firmware de esa corrida: CONE_DEG = 20, 40 medidas/s,
+TURN_RATE 21. La columna "esperadas" la recalculó el firmware nuevo (CONE 3, 20/s), no es la de la corrida.
+Corrida #1  (la mas reciente)
+  resultado: no lo encontro
+  duracion 51.4 s | 2052 medidas
+  objetos vistos: 10
+      #   tiempo  distancia  medidas  esperadas  resultado
+      1    4.3 s     623 mm        5       6.6   otro
+      2    4.7 s     645 mm        5       6.5   otro
+      3    4.9 s     662 mm        4       6.4   otro
+      4    5.4 s     680 mm       20       6.4   otro
+      5   14.3 s     711 mm        4       6.2   otro
+      6   14.6 s     897 mm        5       5.6   otro
+      7   26.4 s     655 mm       23       6.5   otro
+      8   27.1 s     698 mm       26       6.3   otro
+      9   34.1 s     724 mm        3       6.2   otro
+     10   39.4 s     398 mm        3       8.3   otro
