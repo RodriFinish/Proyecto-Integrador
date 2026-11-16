@@ -13,11 +13,10 @@
 // Uso:
 //   1. Subir el programa con el USB (VIN desconectado).
 //   2. Desenchufar el USB y dar energía por VIN: a los START_DELAY_MS arranca la misión.
-//   3. Volver a enchufar el USB y abrir el monitor: imprime los datos guardados.
-//      Mientras haya una corrida sin leer, NO arranca otra: espera una tecla, la
-//      marca como leída y queda en MODO USB (no mueve los motores ni graba nada).
-//      Sin datos pendientes, cualquier tecla en los primeros segundos también
-//      deja el robot en MODO USB.
+//   3. Para repetir la prueba sin USB: apretar RESET. Vuelve a contar y arranca otra misión.
+//   4. Volver a enchufar el USB (VIN desconectado) y abrir el monitor: imprime los datos
+//      guardados (las 2 últimas corridas). OJO: hay que mandar una tecla durante la
+//      cuenta regresiva para quedarse en MODO USB; si no, arranca una misión nueva.
 //
 // Detección: mientras gira, detecta los bordes del objeto por saltos de distancia
 // y cuenta cuántas medidas duró. Lo compara con las que debería durar un objeto
@@ -31,25 +30,26 @@
 
 namespace {
 // --- Objetivo ---
-constexpr float TARGET_WIDTH_MM = 55.0f;       // diámetro del objeto a buscar
+constexpr float TARGET_WIDTH_MM = 50.0f;       // diámetro del objeto a buscar (base de 5 cm)
 
 // --- Giro (MEDIR: girar 360° con SCAN_PWM, cronometrar t, ω = 360 / t) ---
 constexpr int SCAN_PWM = 150;
-constexpr float TURN_RATE_DEG_PER_S = 57.0f;   // estimado con 45 rpm, rueda 65 mm, trocha 180 mm
+constexpr float TURN_RATE_DEG_PER_S = 21.0f;   // aprox.: una vuelta en ~17 s (cronometrado a ojo, falta medir bien)
 
 // --- Geometría del robot (MEDIR) ---
 constexpr float SENSOR_OFFSET_MM = 100.0f;     // del eje de giro al sensor
 
 // --- Cono del VL53L0X (CALIBRAR) ---
 // 0 = solo geometría. El cono hace que el objeto dure más medidas de las que da la fórmula.
-constexpr float CONE_DEG = 0.0f;
+// Calibrar con una corrida: CONE_DEG = medidas reales × DEG_PER_SAMPLE − ángulo geométrico.
+constexpr float CONE_DEG = 8.0f;               // de la prueba del 9/11: base a ~68 cm duró 20-26 medidas (40/s)
 
 // --- Frecuencia del sensor ---
 // 20 ms es el tiempo de medición mínimo del VL53L0X (modo rápido). Con 33 ms / 40 ms
-// el objeto de 5,5 cm duraba muy pocas medidas y a 30-40 cm quedaba como "ruido".
+// el objeto de 5 cm duraba muy pocas medidas y a 30-40 cm quedaba como "ruido".
 // (El ruido que se vio una vez venía de apuntar a una pantalla, no de este modo.)
 constexpr uint32_t TIMING_BUDGET_US = 20000;
-constexpr uint16_t SAMPLE_INTERVAL_MS = 25;    // 40 medidas por segundo
+constexpr uint16_t SAMPLE_INTERVAL_MS = 50;    // 20 medidas por segundo (antes 25 ms = 40/s)
 
 // --- Detección ---
 constexpr uint16_t MIN_RANGE_MM = 40;
@@ -59,7 +59,7 @@ constexpr uint8_t SAMPLE_TOLERANCE = 2;        // ± medidas aceptadas
 constexpr uint8_t MIN_SAMPLES = 3;             // menos que esto se toma como ruido
 
 // --- Misión ---
-constexpr uint16_t START_DELAY_MS = 5000;      // espera antes de arrancar (y ventana para modo USB)
+constexpr uint16_t START_DELAY_MS = 3000;      // espera antes de arrancar (y ventana para modo USB)
 constexpr uint8_t SEARCH_TURNS = 3;            // vueltas máximas antes de rendirse
 constexpr uint32_t MAX_SEARCH_MS = SEARCH_TURNS * 360000UL / (uint32_t)TURN_RATE_DEG_PER_S;
 constexpr uint16_t LOG_UPDATE_MS = 2000;       // cada cuánto actualiza duración y medidas en la EEPROM
@@ -574,20 +574,11 @@ void setup() {
         }
     }
 
-    if (runlog::hasUnread()) {
-        // No pisar una corrida que nadie vio: esperar a que alguien la lea por USB.
-        Serial.println(F("Hay datos SIN LEER: la mision no arranca para no pisarlos."));
-        Serial.println(F("Envia cualquier tecla para marcarlos como leidos (queda en MODO USB)."));
-        while (!Serial.available()) {
-            delay(10);
-        }
-        while (Serial.available()) {
-            Serial.read();
-        }
+    // Siempre arranca la misión salvo que llegue una tecla en la cuenta regresiva:
+    // así, apretando RESET (sin USB) se repite la prueba. La corrida nueva pisa la más
+    // vieja de la EEPROM; la anterior queda como segunda en el informe.
+    if (waitForUsbKey()) {
         runlog::markRead();
-        mode = MODE_USB;
-        printUsbHelp();
-    } else if (waitForUsbKey()) {
         mode = MODE_USB;
         printUsbHelp();
     } else {

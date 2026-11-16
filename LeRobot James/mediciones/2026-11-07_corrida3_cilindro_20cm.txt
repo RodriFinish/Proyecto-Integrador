@@ -1,0 +1,25 @@
+Corrida #3 - cilindro a 20 cm (cinta), lectura estatica ~252 mm. TURN_RATE_DEG_PER_S = 21, CONE_DEG = 0, tolerancia +-2.
+Corrida #3  (la mas reciente)
+  resultado: OBJETO ENCONTRADO y centrado
+  duracion 40.1 s | 1552 medidas
+  centrado: objeto a 255 mm | cruce lento: 41 lecturas, 980 ms | intentos: 1
+  al final apunta a 210 mm -> NO quedo apuntando al objeto
+  objetos vistos: 17
+      #   tiempo  distancia  medidas  esperadas  resultado
+      1    1.9 s     218 mm        4       18.8   otro
+      2    2.0 s     251 mm        3       17.1   otro
+      3    4.9 s     311 mm        3       14.6   otro
+      4    8.7 s     185 mm        5       21.0   otro
+      5   12.3 s     260 mm       45       16.6   otro
+      6   15.4 s     338 mm        3       13.7   otro
+      7   18.9 s     285 mm       35       15.6   otro
+      8   21.1 s     281 mm       20       15.7   otro
+      9   21.8 s     210 mm        4       19.3   otro
+     10   22.0 s     245 mm        3       17.4   otro
+     11   22.2 s     304 mm        7       14.8   otro
+     12   27.3 s     257 mm       21       16.8   otro
+     13   29.9 s     285 mm       29       15.6   otro
+     14   30.7 s     212 mm        3       19.2   otro
+     15   30.8 s     233 mm        4       18.0   otro
+     16   35.8 s     133 mm        3       25.6   otro
+     17   36.3 s     255 mm       18       16.9   OBJETO

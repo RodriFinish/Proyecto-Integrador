@@ -5,8 +5,8 @@
 // Motor A drives the left wheel; motor B drives the right wheel.
 // Cableado real del robot (2026-11-06).
 #define TB6612_PWMA_PIN 5
-#define TB6612_AIN2_PIN 6
-#define TB6612_AIN1_PIN 7
+#define TB6612_AIN2_PIN 7
+#define TB6612_AIN1_PIN 6
 #define TB6612_BIN1_PIN 9
 #define TB6612_BIN2_PIN 10
 #define TB6612_PWMB_PIN 11
