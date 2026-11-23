@@ -53,6 +53,14 @@ constexpr float CONE_DEG = 8.0f;               // de la prueba del 9/11: base a 
 constexpr uint32_t TIMING_BUDGET_US = 20000;
 constexpr uint16_t SAMPLE_INTERVAL_MS = 50;    // 20 medidas por segundo (antes 25 ms = 40/s)
 
+// --- Umbral de señal (CALIBRAR contra el piso) ---
+// Retornos más débiles que esto se descartan (lectura "fuera de rango"). El piso, visto
+// muy de costado, devuelve poca luz: subiendo el umbral deja de verlo. Subirlo de más
+// también acorta el alcance. 0.25 = valor de fábrica de la librería.
+// En MODO USB: '+' / '-' lo cambian en vivo (no se guarda: copiar el valor acá).
+constexpr float SIGNAL_RATE_LIMIT_MCPS = 0.25f;
+constexpr float SIGNAL_RATE_STEP = 0.05f;
+
 // --- Detección ---
 constexpr uint16_t MIN_RANGE_MM = 40;
 constexpr uint16_t MAX_RANGE_MM = 1200;        // más allá se considera "nada"
@@ -140,6 +148,7 @@ uint32_t lastSampleAt = 0;
 uint32_t missionStartAt = 0;
 uint32_t lastLogUpdateAt = 0;
 uint16_t readings = 0;
+float signalRateLimit = SIGNAL_RATE_LIMIT_MCPS;
 
 bool hasPrevious = false;
 uint16_t previousRangeMm = 0;
@@ -158,9 +167,26 @@ bool startSensor() {
     if (!tof.init()) {
         return false;
     }
+    tof.setSignalRateLimit(signalRateLimit);
     tof.setMeasurementTimingBudget(TIMING_BUDGET_US);
     tof.startContinuous(SAMPLE_INTERVAL_MS);
     return true;
+}
+
+// Cambia el umbral de señal (solo en MODO USB) y lo imprime.
+void changeSignalRate(float delta) {
+    float next = signalRateLimit + delta;
+    if (next < 0.05f) {
+        next = 0.05f;
+    }
+    tof.stopContinuous();
+    if (tof.setSignalRateLimit(next)) {
+        signalRateLimit = next;
+    }
+    tof.startContinuous(SAMPLE_INTERVAL_MS);
+    Serial.print(F("Umbral de senal: "));
+    Serial.print(signalRateLimit, 2);
+    Serial.println(F(" MCPS (copiar en SIGNAL_RATE_LIMIT_MCPS)"));
 }
 
 // Ángulo (grados) que ocupa el objeto visto desde el eje de giro.
@@ -290,6 +316,7 @@ void printUsbHelp() {
     Serial.println(F("  n = mostrar / ocultar distancias"));
     Serial.println(F("  m = arrancar la mision ahora"));
     Serial.println(F("  s = probar el servo (ida ~90 grados y vuelta)"));
+    Serial.println(F("  + / - = subir / bajar el umbral de senal (para que no vea el piso)"));
 }
 
 // ---------- Motores ----------
@@ -666,6 +693,12 @@ void handleCommand(char c) {
                 Serial.println(F("Sin sensor VL53L0X: la mision esta deshabilitada."));
             } else if (mode != MODE_MISSION) {
                 startMission();
+            }
+            break;
+        case '+':
+        case '-':
+            if (mode == MODE_USB && sensorOk) {
+                changeSignalRate(c == '+' ? SIGNAL_RATE_STEP : -SIGNAL_RATE_STEP);
             }
             break;
         case 's': case 'S':
