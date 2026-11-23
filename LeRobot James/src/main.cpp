@@ -134,6 +134,7 @@ Motors motors;
 Servo servo;
 
 Mode mode = MODE_USB;
+bool sensorOk = false;  // sin sensor: solo MODO USB (sirve para probar el servo sin el VL53L0X)
 bool showReadings = true;
 uint32_t lastSampleAt = 0;
 uint32_t missionStartAt = 0;
@@ -638,6 +639,9 @@ void sample() {
         return;
     }
     lastSampleAt = now;
+    if (!sensorOk) {
+        return;
+    }
 
     const uint16_t rangeMm = readOnce();
     if (rangeMm != 0 && mode == MODE_MISSION) {
@@ -658,14 +662,19 @@ void handleCommand(char c) {
             showReadings = !showReadings;
             break;
         case 'm': case 'M':
-            if (mode != MODE_MISSION) {
+            if (!sensorOk) {
+                Serial.println(F("Sin sensor VL53L0X: la mision esta deshabilitada."));
+            } else if (mode != MODE_MISSION) {
                 startMission();
             }
             break;
         case 's': case 'S':
-            if (mode != MODE_MISSION) {
+            if (mode == MODE_MISSION) {
+                Serial.println(F("En mision: el servo no se prueba."));
+            } else {
                 Serial.println(F("Servo: ida y vuelta."));
                 servoSwing();
+                Serial.println(F("Servo: listo."));
             }
             break;
         default:
@@ -714,12 +723,13 @@ void setup() {
 
     printReport();
 
-    if (!startSensor()) {
-        Serial.println(F("ERROR: no encuentro el sensor VL53L0X"));
-        while (true) {
-            motors.stop();
-            delay(1000);
-        }
+    sensorOk = startSensor();
+    if (!sensorOk) {
+        // Sin sensor no hay misión: queda en MODO USB (motores apagados) para probar el servo.
+        Serial.println(F("ERROR: no encuentro el sensor VL53L0X. Quedo en MODO USB sin mision."));
+        mode = MODE_USB;
+        printUsbHelp();
+        return;
     }
 
     // Siempre arranca la misión salvo que llegue una tecla en la cuenta regresiva:
