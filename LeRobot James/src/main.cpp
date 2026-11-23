@@ -97,7 +97,7 @@ constexpr int16_t CENTER_COAST_MS = 0;
 // Avanza (o retrocede si quedó muy cerca) en línea recta mirando el sensor, hasta que la
 // distancia SENSOR -> objeto sea APPROACH_TARGET_MM. Sin encoders: si el robot se desvía
 // y el objeto sale del cono, lo detecta por el salto de distancia y se detiene.
-constexpr uint16_t APPROACH_TARGET_MM = 300;   // 30 cm, medidos desde el sensor
+constexpr uint16_t APPROACH_TARGET_MM = 500;   // 50 cm, medidos desde el sensor
 constexpr uint16_t APPROACH_TOL_MM = 20;       // aceptado: ±2 cm
 // CALIBRAR: lo que sigue andando después de frenar (si queda más cerca de 40 cm, subir).
 constexpr uint16_t APPROACH_COAST_MM = 30;
