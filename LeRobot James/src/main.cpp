@@ -108,7 +108,10 @@ constexpr int APPROACH_KICK_PWM = 180;
 constexpr uint16_t APPROACH_KICK_MS = 80;
 constexpr uint16_t APPROACH_TIMEOUT_MS = 10000;  // por cada tramo
 constexpr uint8_t APPROACH_TRIES = 3;          // tramos (el 2º y 3º corrigen lo que se pasó)
-constexpr uint8_t APPROACH_LOST_CONFIRM = 2;   // lecturas seguidas "lejos" = lo perdió
+constexpr uint8_t APPROACH_LOST_CONFIRM = 2;   // lecturas seguidas con salto = lo perdió
+// Antes de avanzar, la lectura tiene que parecerse a la distancia a la que se detectó el
+// objeto. Si no (p. ej. quedó mirando el piso), no se mueve: evita perseguir otra cosa.
+constexpr uint16_t APPROACH_START_TOL_MM = 150;
 
 // --- Servo continuo ---
 // Un servo continuo no sabe en qué ángulo está: se controla velocidad y tiempo.
@@ -478,9 +481,14 @@ struct ApproachResult {
     uint16_t finalMm;  // distancia al terminar (0 = no pudo medir)
 };
 
-// Con el robot ya centrado, avanza o retrocede hasta quedar a APPROACH_TARGET_MM.
-ApproachResult approachTarget() {
+// Con el robot ya centrado en un objeto a objMm, avanza o retrocede hasta quedar a
+// APPROACH_TARGET_MM.
+ApproachResult approachTarget(uint16_t objMm) {
     ApproachResult res = {false, readAverage(4)};
+    const uint16_t startDiff = res.finalMm > objMm ? res.finalMm - objMm : objMm - res.finalMm;
+    if (res.finalMm == 0 || startDiff > APPROACH_START_TOL_MM) {
+        return res;  // no está mirando el objeto: no moverse
+    }
     for (uint8_t attempt = 0; attempt < APPROACH_TRIES && res.finalMm != 0; ++attempt) {
         const int16_t error = (int16_t)res.finalMm - (int16_t)APPROACH_TARGET_MM;
         if (abs(error) <= APPROACH_TOL_MM) {
@@ -502,8 +510,11 @@ ApproachResult approachTarget() {
             if (r < MIN_RANGE_MM) {
                 continue;  // lectura inválida (0) o basura
             }
-            // Salto hacia lejos (o "fuera de rango"): el objeto salió del cono.
-            if (r >= lastGood + EDGE_JUMP_MM) {
+            // Salto brusco (para cualquier lado): el objeto salió del cono. Hacia lejos =
+            // fondo o "fuera de rango"; hacia cerca = el piso u otra cosa. Andando, la
+            // distancia real cambia pocos mm por medida.
+            const uint16_t jump = r > lastGood ? r - lastGood : lastGood - r;
+            if (jump >= EDGE_JUMP_MM) {
                 if (++lostStreak >= APPROACH_LOST_CONFIRM) {
                     lost = true;
                     break;
@@ -602,7 +613,7 @@ void evaluateSegment() {
         statusLed(HIGH);  // LED L prendido: lo encontró
         center = centerByEdges(avgRangeMm);
         if (center.ok) {
-            approach = approachTarget();
+            approach = approachTarget(avgRangeMm);
             if (approach.ok) {
                 servoSwing();
             }
@@ -757,6 +768,10 @@ void setup() {
     Serial.begin(SERIAL_BAUD);
     Wire.begin();
     Wire.setWireTimeout(I2C_TIMEOUT_US, true);  // no colgarse si el ruido traba el bus
+    // El servo continuo, con el pin al aire, puede girar solo: dejarlo en LOW (sin pulsos
+    // = quieto) hasta que servoSwing() lo use.
+    pinMode(SERVO_PIN, OUTPUT);
+    digitalWrite(SERVO_PIN, LOW);
     motors.begin();
     motors.stop();
     runlog::begin();
