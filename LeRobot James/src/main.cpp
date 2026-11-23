@@ -97,8 +97,8 @@ constexpr int16_t CENTER_COAST_MS = 0;
 // Avanza (o retrocede si quedó muy cerca) en línea recta mirando el sensor, hasta que la
 // distancia SENSOR -> objeto sea APPROACH_TARGET_MM. Sin encoders: si el robot se desvía
 // y el objeto sale del cono, lo detecta por el salto de distancia y se detiene.
-constexpr uint16_t APPROACH_TARGET_MM = 400;   // 40 cm, medidos desde el sensor
-constexpr uint16_t APPROACH_TOL_MM = 20;       // aceptado: 38-42 cm
+constexpr uint16_t APPROACH_TARGET_MM = 500;   // 50 cm, medidos desde el sensor
+constexpr uint16_t APPROACH_TOL_MM = 20;       // aceptado: ±2 cm
 // CALIBRAR: lo que sigue andando después de frenar (si queda más cerca de 40 cm, subir).
 constexpr uint16_t APPROACH_COAST_MM = 30;
 // CALIBRAR: si al avanzar se va hacia un lado, bajar el PWM de la rueda contraria.
@@ -112,6 +112,14 @@ constexpr uint8_t APPROACH_LOST_CONFIRM = 2;   // lecturas seguidas con salto = 
 // Antes de avanzar, la lectura tiene que parecerse a la distancia a la que se detectó el
 // objeto. Si no (p. ej. quedó mirando el piso), no se mueve: evita perseguir otra cosa.
 constexpr uint16_t APPROACH_START_TOL_MM = 150;
+
+// --- Corrección de puntería (antes de disparar) ---
+// Ya centrado y a la distancia pedida, gira un toque antes de mover el servo.
+// CALIBRAR: positivo = a la derecha, negativo = a la izquierda, 0 = no corrige.
+// Si el tiro sigue yendo a la izquierda, subir; si ahora se va a la derecha, bajar.
+// Con menos de ~40 ms puede que no llegue a moverse (fricción).
+constexpr int16_t AIM_OFFSET_MS = 60;
+constexpr int AIM_PWM = 180;
 
 // --- Servo continuo ---
 // Un servo continuo no sabe en qué ángulo está: se controla velocidad y tiempo.
@@ -539,6 +547,20 @@ ApproachResult approachTarget(uint16_t objMm) {
     return res;
 }
 
+// ---------- Puntería ----------
+
+// Giro corto en el lugar para corregir la puntería (AIM_OFFSET_MS: + derecha, - izquierda).
+void aimOffset() {
+    if (AIM_OFFSET_MS == 0) {
+        return;
+    }
+    const int8_t dir = AIM_OFFSET_MS > 0 ? 1 : -1;  // derecha: izquierda adelante, derecha atrás
+    motors.setSpeed(dir * AIM_PWM, -dir * AIM_PWM);
+    delay(AIM_OFFSET_MS > 0 ? AIM_OFFSET_MS : -AIM_OFFSET_MS);
+    motors.stop();
+    delay(CENTER_PAUSE_MS);  // que se quede quieto antes de disparar
+}
+
 // ---------- Servo ----------
 
 // Ida ~90°, pausa y vuelta. Solo manda pulsos mientras se mueve (detach al final),
@@ -615,6 +637,7 @@ void evaluateSegment() {
         if (center.ok) {
             approach = approachTarget(avgRangeMm);
             if (approach.ok) {
+                aimOffset();
                 servoSwing();
             }
         }
