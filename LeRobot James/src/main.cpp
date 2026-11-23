@@ -141,6 +141,15 @@ VL53L0X tof;
 Motors motors;
 Servo servo;
 
+// Si el servo usa el pin del LED (D13), el LED no se toca: le mandaría basura al servo.
+constexpr bool USE_STATUS_LED = SERVO_PIN != LED_BUILTIN;
+
+void statusLed(uint8_t value) {
+    if (USE_STATUS_LED) {
+        digitalWrite(LED_BUILTIN, value);
+    }
+}
+
 Mode mode = MODE_USB;
 bool sensorOk = false;  // sin sensor: solo MODO USB (sirve para probar el servo sin el VL53L0X)
 bool showReadings = true;
@@ -563,7 +572,7 @@ void endMission(RunStatus status, uint16_t centerHalfMs = 0, uint16_t targetMm =
                 uint16_t approachMm = 0) {
     motors.stop();
     mode = MODE_DONE;
-    digitalWrite(LED_BUILTIN, status == RUN_FOUND ? HIGH : LOW);
+    statusLed(status == RUN_FOUND ? HIGH : LOW);
     blinkPeriodMs = status == RUN_NOT_CENTERED     ? 150
                     : status == RUN_NOT_APPROACHED ? 600
                                                    : 0;
@@ -590,7 +599,7 @@ void evaluateSegment() {
     CenterResult center = {false, 0, 0, 0, 0};
     ApproachResult approach = {false, 0};
     if (match) {
-        digitalWrite(LED_BUILTIN, HIGH);  // LED L prendido: lo encontró
+        statusLed(HIGH);  // LED L prendido: lo encontró
         center = centerByEdges(avgRangeMm);
         if (center.ok) {
             approach = approachTarget();
@@ -751,8 +760,10 @@ void setup() {
     motors.begin();
     motors.stop();
     runlog::begin();
-    pinMode(LED_BUILTIN, OUTPUT);
-    digitalWrite(LED_BUILTIN, LOW);
+    if (USE_STATUS_LED) {
+        pinMode(LED_BUILTIN, OUTPUT);
+    }
+    statusLed(LOW);
 
     printReport();
 
@@ -793,6 +804,6 @@ void loop() {
             runlog::update(missionDs(), readings);
         }
     } else if (blinkPeriodMs) {
-        digitalWrite(LED_BUILTIN, (millis() / blinkPeriodMs) % 2);
+        statusLed((millis() / blinkPeriodMs) % 2);
     }
 }

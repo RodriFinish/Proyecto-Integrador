@@ -14,10 +14,13 @@
 // Si queda sin configurar, flota y los motores andan "a veces".
 #define TB6612_STBY_PIN 8
 
-// Servo de rotación continua (señal). D3 está libre.
+// Servo de rotación continua (señal) en D13.
+// D13 es también el LED "L" de la placa: con el servo ahí, el programa no usa el LED
+// para mostrar el resultado (ver con 'r' por USB). El bootloader hace parpadear D13 al
+// reiniciar, así que el servo puede dar un tironcito al encender o al apretar RESET.
 // La librería Servo usa el Timer1: los pines 9 y 10 ya no sirven para analogWrite,
 // pero acá solo se usan con digitalWrite (BIN1/BIN2), así que no hay conflicto.
-#define SERVO_PIN 3
+#define SERVO_PIN 13
 
 // Motor speeds
 #define FORWARD_SPEED 200, 200
