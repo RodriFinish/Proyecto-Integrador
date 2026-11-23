@@ -14,6 +14,11 @@
 // Si queda sin configurar, flota y los motores andan "a veces".
 #define TB6612_STBY_PIN 8
 
+// Servo de rotación continua (señal). D3 está libre.
+// La librería Servo usa el Timer1: los pines 9 y 10 ya no sirven para analogWrite,
+// pero acá solo se usan con digitalWrite (BIN1/BIN2), así que no hay conflicto.
+#define SERVO_PIN 3
+
 // Motor speeds
 #define FORWARD_SPEED 200, 200
 #define BACKWARD_SPEED -150, -150

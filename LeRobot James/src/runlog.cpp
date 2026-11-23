@@ -13,7 +13,7 @@
 namespace {
 constexpr uint8_t MAGIC0 = 'L';
 constexpr uint8_t MAGIC1 = 'R';
-constexpr uint8_t VERSION = 3;  // cambiar si cambia RunHeader u ObjectRecord (borra lo guardado)
+constexpr uint8_t VERSION = 4;  // cambiar si cambia RunHeader u ObjectRecord (borra lo guardado)
 
 constexpr int ADDR_MAGIC = 0;
 constexpr int ADDR_VERSION = 2;
@@ -109,7 +109,7 @@ void update(uint16_t durationDs, uint16_t readings) {
 
 void finish(RunStatus status, uint16_t durationDs, uint16_t readings,
             uint16_t centerHalfMs, uint16_t targetMm, uint16_t finalMm,
-            uint8_t centerSamples, uint8_t centerTries) {
+            uint8_t centerSamples, uint8_t centerTries, uint16_t approachMm) {
     current.status = status;
     current.durationDs = durationDs;
     current.readings = readings;
@@ -118,6 +118,7 @@ void finish(RunStatus status, uint16_t durationDs, uint16_t readings,
     current.finalMm = finalMm;
     current.centerSamples = centerSamples;
     current.centerTries = centerTries;
+    current.approachMm = approachMm;
     saveHeader();
 }
 
