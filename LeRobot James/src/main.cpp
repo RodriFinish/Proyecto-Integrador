@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <VL53L0X.h>
+#include <Servo.h>
 #include <math.h>
 
 #include "motors.h"
@@ -26,7 +27,8 @@
 //   θ  = 2·atan(w / 2D)    ángulo que ocupa el objeto (D = distancia + desfase del sensor)
 //   Δθ = ω · T             grados que gira el robot entre dos medidas
 //
-// Si coincide (± tolerancia), vuelve al centro del objeto y se detiene.
+// Si coincide (± tolerancia), vuelve al centro del objeto, avanza o retrocede hasta
+// quedar a APPROACH_TARGET_MM y mueve el servo ~90° y de vuelta.
 
 namespace {
 // --- Objetivo ---
@@ -50,6 +52,14 @@ constexpr float CONE_DEG = 8.0f;               // de la prueba del 9/11: base a 
 // (El ruido que se vio una vez venía de apuntar a una pantalla, no de este modo.)
 constexpr uint32_t TIMING_BUDGET_US = 20000;
 constexpr uint16_t SAMPLE_INTERVAL_MS = 50;    // 20 medidas por segundo (antes 25 ms = 40/s)
+
+// --- Umbral de señal (CALIBRAR contra el piso) ---
+// Retornos más débiles que esto se descartan (lectura "fuera de rango"). El piso, visto
+// muy de costado, devuelve poca luz: subiendo el umbral deja de verlo. Subirlo de más
+// también acorta el alcance. 0.25 = valor de fábrica de la librería.
+// En MODO USB: '+' / '-' lo cambian en vivo (no se guarda: copiar el valor acá).
+constexpr float SIGNAL_RATE_LIMIT_MCPS = 0.25f;
+constexpr float SIGNAL_RATE_STEP = 0.05f;
 
 // --- Detección ---
 constexpr uint16_t MIN_RANGE_MM = 40;
@@ -83,6 +93,36 @@ constexpr uint16_t CENTER_AIM_TOL_MM = 30;     // "quedó apuntando" = distancia
 // CALIBRAR: si al final queda pasado del centro, subir; si queda corto, bajar (puede ser negativo).
 constexpr int16_t CENTER_COAST_MS = 0;
 
+// --- Acercamiento (después de centrarse) ---
+// Avanza (o retrocede si quedó muy cerca) en línea recta mirando el sensor, hasta que la
+// distancia SENSOR -> objeto sea APPROACH_TARGET_MM. Sin encoders: si el robot se desvía
+// y el objeto sale del cono, lo detecta por el salto de distancia y se detiene.
+constexpr uint16_t APPROACH_TARGET_MM = 400;   // 40 cm, medidos desde el sensor
+constexpr uint16_t APPROACH_TOL_MM = 20;       // aceptado: 38-42 cm
+// CALIBRAR: lo que sigue andando después de frenar (si queda más cerca de 40 cm, subir).
+constexpr uint16_t APPROACH_COAST_MM = 30;
+// CALIBRAR: si al avanzar se va hacia un lado, bajar el PWM de la rueda contraria.
+constexpr int APPROACH_PWM_LEFT = 140;
+constexpr int APPROACH_PWM_RIGHT = 140;
+constexpr int APPROACH_KICK_PWM = 180;
+constexpr uint16_t APPROACH_KICK_MS = 80;
+constexpr uint16_t APPROACH_TIMEOUT_MS = 10000;  // por cada tramo
+constexpr uint8_t APPROACH_TRIES = 3;          // tramos (el 2º y 3º corrigen lo que se pasó)
+constexpr uint8_t APPROACH_LOST_CONFIRM = 2;   // lecturas seguidas "lejos" = lo perdió
+
+// --- Servo continuo ---
+// Un servo continuo no sabe en qué ángulo está: se controla velocidad y tiempo.
+// Antes de la misión se lo deja a mano en la posición inicial. "90°" = girar SERVO_GO_MS.
+// CALIBRAR con 's' en MODO USB:
+//   - si no queda quieto con SERVO_STOP_US, ajustar SERVO_STOP_US (típico 1480-1520);
+//   - si gira para el lado equivocado, cambiar el signo de SERVO_SPEED_US;
+//   - si se pasa o no llega a 90°, ajustar SERVO_GO_MS; si no vuelve igual, SERVO_BACK_MS.
+constexpr uint16_t SERVO_STOP_US = 1500;
+constexpr int16_t SERVO_SPEED_US = 200;        // diferencia con STOP (más = más rápido, máx ~500)
+constexpr uint16_t SERVO_GO_MS = 400;
+constexpr uint16_t SERVO_BACK_MS = 400;
+constexpr uint16_t SERVO_HOLD_MS = 500;        // quieto en los 90° antes de volver
+
 // Si el ruido de los motores traba el I2C, Wire corta a los 25 ms en vez de colgarse.
 constexpr uint32_t I2C_TIMEOUT_US = 25000;
 
@@ -99,13 +139,25 @@ enum Mode : uint8_t { MODE_USB, MODE_MISSION, MODE_DONE };
 
 VL53L0X tof;
 Motors motors;
+Servo servo;
+
+// Si el servo usa el pin del LED (D13), el LED no se toca: le mandaría basura al servo.
+constexpr bool USE_STATUS_LED = SERVO_PIN != LED_BUILTIN;
+
+void statusLed(uint8_t value) {
+    if (USE_STATUS_LED) {
+        digitalWrite(LED_BUILTIN, value);
+    }
+}
 
 Mode mode = MODE_USB;
+bool sensorOk = false;  // sin sensor: solo MODO USB (sirve para probar el servo sin el VL53L0X)
 bool showReadings = true;
 uint32_t lastSampleAt = 0;
 uint32_t missionStartAt = 0;
 uint32_t lastLogUpdateAt = 0;
 uint16_t readings = 0;
+float signalRateLimit = SIGNAL_RATE_LIMIT_MCPS;
 
 bool hasPrevious = false;
 uint16_t previousRangeMm = 0;
@@ -124,9 +176,26 @@ bool startSensor() {
     if (!tof.init()) {
         return false;
     }
+    tof.setSignalRateLimit(signalRateLimit);
     tof.setMeasurementTimingBudget(TIMING_BUDGET_US);
     tof.startContinuous(SAMPLE_INTERVAL_MS);
     return true;
+}
+
+// Cambia el umbral de señal (solo en MODO USB) y lo imprime.
+void changeSignalRate(float delta) {
+    float next = signalRateLimit + delta;
+    if (next < 0.05f) {
+        next = 0.05f;
+    }
+    tof.stopContinuous();
+    if (tof.setSignalRateLimit(next)) {
+        signalRateLimit = next;
+    }
+    tof.startContinuous(SAMPLE_INTERVAL_MS);
+    Serial.print(F("Umbral de senal: "));
+    Serial.print(signalRateLimit, 2);
+    Serial.println(F(" MCPS (copiar en SIGNAL_RATE_LIMIT_MCPS)"));
 }
 
 // Ángulo (grados) que ocupa el objeto visto desde el eje de giro.
@@ -166,9 +235,10 @@ void printSeconds(uint16_t ds, uint8_t width) {
 
 void printStatus(uint8_t status) {
     switch (status) {
-        case RUN_FOUND:        Serial.print(F("OBJETO ENCONTRADO y centrado")); break;
+        case RUN_FOUND:        Serial.print(F("OBJETO ENCONTRADO, centrado, a 40 cm y servo movido")); break;
         case RUN_NOT_FOUND:    Serial.print(F("no lo encontro")); break;
         case RUN_NOT_CENTERED: Serial.print(F("lo encontro, pero NO pudo centrarse (no lo cruzo lento)")); break;
+        case RUN_NOT_APPROACHED: Serial.print(F("se centro, pero NO pudo quedar a 40 cm (servo sin mover)")); break;
         default:            Serial.print(F("incompleta (se corto la energia o se reinicio)")); break;
     }
 }
@@ -194,7 +264,8 @@ void printReport() {
         Serial.print(F(" | "));
         Serial.print(h.readings);
         Serial.println(F(" medidas"));
-        if (h.status == RUN_FOUND || h.status == RUN_NOT_CENTERED) {
+        if (h.status == RUN_FOUND || h.status == RUN_NOT_CENTERED ||
+            h.status == RUN_NOT_APPROACHED) {
             Serial.print(F("  centrado: objeto a "));
             Serial.print(h.targetMm);
             Serial.print(F(" mm | cruce lento: "));
@@ -204,14 +275,19 @@ void printReport() {
             Serial.print(F(" ms | intentos: "));
             Serial.println(h.centerTries);
         }
-        if (h.status == RUN_FOUND) {
-            Serial.print(F("  al final apunta a "));
+        if (h.status == RUN_FOUND || h.status == RUN_NOT_APPROACHED) {
+            Serial.print(F("  despues de centrarse apunta a "));
             Serial.print(h.finalMm);
             Serial.print(F(" mm -> "));
             const uint16_t diff = h.finalMm > h.targetMm ? h.finalMm - h.targetMm
                                                          : h.targetMm - h.finalMm;
             Serial.println(diff <= CENTER_AIM_TOL_MM ? F("QUEDO APUNTANDO AL OBJETO")
                                                      : F("NO quedo apuntando al objeto"));
+            Serial.print(F("  acercamiento: quedo a "));
+            Serial.print(h.approachMm);
+            Serial.print(F(" mm (objetivo "));
+            Serial.print(APPROACH_TARGET_MM);
+            Serial.println(F(" mm)"));
         }
 
         Serial.print(F("  objetos vistos: "));
@@ -248,6 +324,8 @@ void printUsbHelp() {
     Serial.println(F("  b = borrar datos guardados"));
     Serial.println(F("  n = mostrar / ocultar distancias"));
     Serial.println(F("  m = arrancar la mision ahora"));
+    Serial.println(F("  s = probar el servo (ida ~90 grados y vuelta)"));
+    Serial.println(F("  + / - = subir / bajar el umbral de senal (para que no vea el piso)"));
 }
 
 // ---------- Motores ----------
@@ -314,6 +392,20 @@ void turnSlow(int8_t dir) {
     motors.setSpeed(-dir * CENTER_PWM, dir * CENTER_PWM);
 }
 
+// Promedio de 'count' lecturas válidas (descarta "fuera de rango"). 0 si ninguna sirve.
+uint16_t readAverage(uint8_t count) {
+    uint32_t sum = 0;
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < count; ++i) {
+        const uint16_t r = readOnce();
+        if (r >= MIN_RANGE_MM && r <= MAX_RANGE_MM) {
+            sum += r;
+            ++n;
+        }
+    }
+    return n ? sum / n : 0;
+}
+
 struct CenterResult {
     bool ok;
     uint16_t halfMs;
@@ -364,21 +456,93 @@ CenterResult centerByEdges(uint16_t objMm) {
         delay(CENTER_PAUSE_MS);
 
         // 3) Medir hacia dónde quedó apuntando (sin "fuera de rango").
-        uint32_t sum = 0;
-        uint8_t n = 0;
-        for (uint8_t i = 0; i < 4; ++i) {
-            const uint16_t r = readOnce();
-            if (r >= MIN_RANGE_MM && r <= MAX_RANGE_MM) {
-                sum += r;
-                ++n;
-            }
-        }
-        res.finalMm = n ? sum / n : 0;
+        res.finalMm = readAverage(4);
         res.ok = true;
         return res;
     }
     motors.stop();
     return res;
+}
+
+// ---------- Acercamiento ----------
+
+// Arranca en línea recta con empujón. dir = +1 adelante, -1 atrás.
+void driveStraight(int8_t dir) {
+    motors.setSpeed(dir * APPROACH_KICK_PWM, dir * APPROACH_KICK_PWM);
+    delay(APPROACH_KICK_MS);
+    motors.setSpeed(dir * APPROACH_PWM_LEFT, dir * APPROACH_PWM_RIGHT);
+}
+
+struct ApproachResult {
+    bool ok;
+    uint16_t finalMm;  // distancia al terminar (0 = no pudo medir)
+};
+
+// Con el robot ya centrado, avanza o retrocede hasta quedar a APPROACH_TARGET_MM.
+ApproachResult approachTarget() {
+    ApproachResult res = {false, readAverage(4)};
+    for (uint8_t attempt = 0; attempt < APPROACH_TRIES && res.finalMm != 0; ++attempt) {
+        const int16_t error = (int16_t)res.finalMm - (int16_t)APPROACH_TARGET_MM;
+        if (abs(error) <= APPROACH_TOL_MM) {
+            res.ok = true;
+            return res;
+        }
+        const int8_t dir = error > 0 ? 1 : -1;  // lejos: adelante; muy cerca: atrás
+        // Frena un poco antes, por lo que sigue andando después de cortar los motores.
+        const uint16_t stopAtMm = dir > 0 ? APPROACH_TARGET_MM + APPROACH_COAST_MM
+                                          : APPROACH_TARGET_MM - APPROACH_COAST_MM;
+
+        driveStraight(dir);
+        const uint32_t start = millis();
+        uint16_t lastGood = res.finalMm;
+        uint8_t lostStreak = 0;
+        bool lost = false;
+        while (millis() - start < APPROACH_TIMEOUT_MS) {
+            const uint16_t r = readOnce();
+            if (r < MIN_RANGE_MM) {
+                continue;  // lectura inválida (0) o basura
+            }
+            // Salto hacia lejos (o "fuera de rango"): el objeto salió del cono.
+            if (r >= lastGood + EDGE_JUMP_MM) {
+                if (++lostStreak >= APPROACH_LOST_CONFIRM) {
+                    lost = true;
+                    break;
+                }
+                continue;
+            }
+            lostStreak = 0;
+            lastGood = r;
+            if ((dir > 0 && r <= stopAtMm) || (dir < 0 && r >= stopAtMm)) {
+                break;
+            }
+        }
+        motors.stop();
+        delay(CENTER_PAUSE_MS);
+        res.finalMm = readAverage(4);
+        if (lost) {
+            return res;  // se desvió: no seguir a ciegas
+        }
+    }
+    res.ok = res.finalMm != 0 &&
+             abs((int16_t)res.finalMm - (int16_t)APPROACH_TARGET_MM) <= APPROACH_TOL_MM;
+    return res;
+}
+
+// ---------- Servo ----------
+
+// Ida ~90°, pausa y vuelta. Solo manda pulsos mientras se mueve (detach al final),
+// así un STOP mal calibrado no lo deja girando despacio.
+void servoSwing() {
+    servo.attach(SERVO_PIN);
+    servo.writeMicroseconds(SERVO_STOP_US + SERVO_SPEED_US);
+    delay(SERVO_GO_MS);
+    servo.writeMicroseconds(SERVO_STOP_US);
+    delay(SERVO_HOLD_MS);
+    servo.writeMicroseconds(SERVO_STOP_US - SERVO_SPEED_US);
+    delay(SERVO_BACK_MS);
+    servo.writeMicroseconds(SERVO_STOP_US);
+    delay(100);
+    servo.detach();
 }
 
 // ---------- Misión ----------
@@ -399,17 +563,21 @@ void startMission() {
     lastSampleAt = missionStartAt;
 }
 
-bool blinkLed = false;  // LED L parpadeando = lo encontró pero no pudo centrarse
+// LED L: prendido = todo bien; parpadeo rápido = no se centró;
+// parpadeo lento = no quedó a 40 cm; apagado = no lo encontró.
+uint16_t blinkPeriodMs = 0;  // 0 = no parpadea
 
 void endMission(RunStatus status, uint16_t centerHalfMs = 0, uint16_t targetMm = 0,
-                uint16_t finalMm = 0, uint8_t centerSamples = 0, uint8_t centerTries = 0) {
+                uint16_t finalMm = 0, uint8_t centerSamples = 0, uint8_t centerTries = 0,
+                uint16_t approachMm = 0) {
     motors.stop();
     mode = MODE_DONE;
-    // LED L: prendido = encontrado y centrado; parpadea = no se centró; apagado = no lo encontró.
-    digitalWrite(LED_BUILTIN, status == RUN_FOUND ? HIGH : LOW);
-    blinkLed = (status == RUN_NOT_CENTERED);
+    statusLed(status == RUN_FOUND ? HIGH : LOW);
+    blinkPeriodMs = status == RUN_NOT_CENTERED     ? 150
+                    : status == RUN_NOT_APPROACHED ? 600
+                                                   : 0;
     runlog::finish(status, missionDs(), readings, centerHalfMs, targetMm, finalMm,
-                   centerSamples, centerTries);
+                   centerSamples, centerTries, approachMm);
     Serial.print(F("MISION TERMINADA: "));
     printStatus(status);
     Serial.println();
@@ -426,11 +594,19 @@ void evaluateSegment() {
     const float diff = fabs(segmentSamples - expectedSamples(avgRangeMm));
     const bool match = diff <= SAMPLE_TOLERANCE;
 
-    // Si es el objeto, primero frenar y centrar; grabar en la EEPROM lleva unos ms.
+    // Si es el objeto, primero frenar, centrar, acercarse y mover el servo;
+    // grabar en la EEPROM lleva unos ms.
     CenterResult center = {false, 0, 0, 0, 0};
+    ApproachResult approach = {false, 0};
     if (match) {
-        digitalWrite(LED_BUILTIN, HIGH);  // LED L prendido: lo encontró
+        statusLed(HIGH);  // LED L prendido: lo encontró
         center = centerByEdges(avgRangeMm);
+        if (center.ok) {
+            approach = approachTarget();
+            if (approach.ok) {
+                servoSwing();
+            }
+        }
     }
 
     ObjectRecord obj;
@@ -441,8 +617,11 @@ void evaluateSegment() {
     runlog::addObject(obj);
 
     if (match) {
-        endMission(center.ok ? RUN_FOUND : RUN_NOT_CENTERED, center.halfMs, avgRangeMm,
-                   center.finalMm, center.samples, center.tries);
+        const RunStatus status = !center.ok    ? RUN_NOT_CENTERED
+                                 : !approach.ok ? RUN_NOT_APPROACHED
+                                                : RUN_FOUND;
+        endMission(status, center.halfMs, avgRangeMm, center.finalMm, center.samples,
+                   center.tries, approach.finalMm);
     }
 }
 
@@ -496,6 +675,9 @@ void sample() {
         return;
     }
     lastSampleAt = now;
+    if (!sensorOk) {
+        return;
+    }
 
     const uint16_t rangeMm = readOnce();
     if (rangeMm != 0 && mode == MODE_MISSION) {
@@ -516,8 +698,25 @@ void handleCommand(char c) {
             showReadings = !showReadings;
             break;
         case 'm': case 'M':
-            if (mode != MODE_MISSION) {
+            if (!sensorOk) {
+                Serial.println(F("Sin sensor VL53L0X: la mision esta deshabilitada."));
+            } else if (mode != MODE_MISSION) {
                 startMission();
+            }
+            break;
+        case '+':
+        case '-':
+            if (mode == MODE_USB && sensorOk) {
+                changeSignalRate(c == '+' ? SIGNAL_RATE_STEP : -SIGNAL_RATE_STEP);
+            }
+            break;
+        case 's': case 'S':
+            if (mode == MODE_MISSION) {
+                Serial.println(F("En mision: el servo no se prueba."));
+            } else {
+                Serial.println(F("Servo: ida y vuelta."));
+                servoSwing();
+                Serial.println(F("Servo: listo."));
             }
             break;
         default:
@@ -561,17 +760,20 @@ void setup() {
     motors.begin();
     motors.stop();
     runlog::begin();
-    pinMode(LED_BUILTIN, OUTPUT);
-    digitalWrite(LED_BUILTIN, LOW);
+    if (USE_STATUS_LED) {
+        pinMode(LED_BUILTIN, OUTPUT);
+    }
+    statusLed(LOW);
 
     printReport();
 
-    if (!startSensor()) {
-        Serial.println(F("ERROR: no encuentro el sensor VL53L0X"));
-        while (true) {
-            motors.stop();
-            delay(1000);
-        }
+    sensorOk = startSensor();
+    if (!sensorOk) {
+        // Sin sensor no hay misión: queda en MODO USB (motores apagados) para probar el servo.
+        Serial.println(F("ERROR: no encuentro el sensor VL53L0X. Quedo en MODO USB sin mision."));
+        mode = MODE_USB;
+        printUsbHelp();
+        return;
     }
 
     // Siempre arranca la misión salvo que llegue una tecla en la cuenta regresiva:
@@ -601,7 +803,7 @@ void loop() {
             lastLogUpdateAt = now;
             runlog::update(missionDs(), readings);
         }
-    } else if (blinkLed) {
-        digitalWrite(LED_BUILTIN, (millis() / 150) % 2);  // no pudo centrarse
+    } else if (blinkPeriodMs) {
+        statusLed((millis() / blinkPeriodMs) % 2);
     }
 }

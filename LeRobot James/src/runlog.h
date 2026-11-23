@@ -9,9 +9,10 @@
 enum RunStatus : uint8_t {
     RUN_EMPTY = 0,       // slot sin usar
     RUN_INCOMPLETE = 1,  // arrancó y no terminó (se cortó la energía o se reinició)
-    RUN_FOUND = 2,       // encontró el objeto y se centró
+    RUN_FOUND = 2,       // encontró el objeto, se centró, quedó a 40 cm y movió el servo
     RUN_NOT_FOUND = 3,   // dio todas las vueltas sin encontrarlo
     RUN_NOT_CENTERED = 4,  // lo encontró, pero al volver lento no lo volvió a ver
+    RUN_NOT_APPROACHED = 5,  // se centró, pero no pudo quedar a la distancia pedida
 };
 
 enum ObjectResult : uint8_t {
@@ -30,6 +31,7 @@ struct RunHeader {
     uint16_t finalMm;       // distancia hacia donde quedó apuntando al final
     uint8_t centerSamples;  // lecturas que vieron el objeto en el último cruce lento
     uint8_t centerTries;    // cruces lentos intentados
+    uint16_t approachMm;    // distancia al objeto después de acercarse (0 = no lo intentó)
 };
 
 struct ObjectRecord {
@@ -49,7 +51,7 @@ bool addObject(const ObjectRecord& obj);  // false si ya no entran más objetos
 void update(uint16_t durationDs, uint16_t readings);
 void finish(RunStatus status, uint16_t durationDs, uint16_t readings,
             uint16_t centerHalfMs, uint16_t targetMm, uint16_t finalMm,
-            uint8_t centerSamples, uint8_t centerTries);
+            uint8_t centerSamples, uint8_t centerTries, uint16_t approachMm);
 
 // "Sin leer": se marca al empezar una corrida y se limpia cuando alguien la ve por USB.
 // Mientras haya datos sin leer, el programa no arranca misiones nuevas (no los pisa).
