@@ -44,7 +44,7 @@ constexpr float SENSOR_OFFSET_MM = 100.0f;     // del eje de giro al sensor
 // --- Cono del VL53L0X (CALIBRAR) ---
 // 0 = solo geometría. El cono hace que el objeto dure más medidas de las que da la fórmula.
 // Calibrar con una corrida: CONE_DEG = medidas reales × DEG_PER_SAMPLE − ángulo geométrico.
-constexpr float CONE_DEG = 8.0f;               // de la prueba del 9/11: base a ~68 cm duró 20-26 medidas (40/s)
+constexpr float CONE_DEG = 23.0f;              // 25/11: el aro duró 14 medidas (40 °/s, 20/s) -> 28° - 4,8° geométrico a 50 cm
 
 // --- Frecuencia del sensor ---
 // 20 ms es el tiempo de medición mínimo del VL53L0X (modo rápido). Con 33 ms / 40 ms
