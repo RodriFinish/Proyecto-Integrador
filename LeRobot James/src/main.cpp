@@ -36,7 +36,7 @@ constexpr float TARGET_WIDTH_MM = 50.0f;       // diámetro del objeto a buscar 
 
 // --- Giro (MEDIR: girar 360° con SCAN_PWM, cronometrar t, ω = 360 / t) ---
 constexpr int SCAN_PWM = 150;
-constexpr float TURN_RATE_DEG_PER_S = 21.0f;   // aprox.: una vuelta en ~17 s (cronometrado a ojo, falta medir bien)
+constexpr float TURN_RATE_DEG_PER_S = 40.0f;   // una vuelta en 9 s (cronometrado el 25/11; antes 21 = ~17 s)
 
 // --- Geometría del robot (MEDIR) ---
 constexpr float SENSOR_OFFSET_MM = 100.0f;     // del eje de giro al sensor
