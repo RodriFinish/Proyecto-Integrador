@@ -99,6 +99,9 @@ constexpr int16_t CENTER_COAST_MS = 0;
 // y el objeto sale del cono, lo detecta por el salto de distancia y se detiene.
 constexpr uint16_t APPROACH_TARGET_MM = 500;   // 50 cm, medidos desde el sensor
 constexpr uint16_t APPROACH_TOL_MM = 20;       // aceptado: ±2 cm
+// CALIBRAR: si arrancó más cerca que el objetivo y tiene que alejarse, queda un poco corto;
+// en ese caso el objetivo pasa a ser APPROACH_TARGET_MM + esto (alejándose, 5 cm más).
+constexpr uint16_t APPROACH_BACK_EXTRA_MM = 50;
 // CALIBRAR: lo que sigue andando después de frenar (si queda más cerca de 40 cm, subir).
 constexpr uint16_t APPROACH_COAST_MM = 30;
 // CALIBRAR: si al avanzar se va hacia un lado, bajar el PWM de la rueda contraria.
@@ -497,16 +500,20 @@ ApproachResult approachTarget(uint16_t objMm) {
     if (res.finalMm == 0 || startDiff > APPROACH_START_TOL_MM) {
         return res;  // no está mirando el objeto: no moverse
     }
+    // Si tiene que alejarse, apunta a quedar APPROACH_BACK_EXTRA_MM más lejos.
+    const uint16_t targetMm = res.finalMm + APPROACH_TOL_MM < APPROACH_TARGET_MM
+                                  ? APPROACH_TARGET_MM + APPROACH_BACK_EXTRA_MM
+                                  : APPROACH_TARGET_MM;
     for (uint8_t attempt = 0; attempt < APPROACH_TRIES && res.finalMm != 0; ++attempt) {
-        const int16_t error = (int16_t)res.finalMm - (int16_t)APPROACH_TARGET_MM;
+        const int16_t error = (int16_t)res.finalMm - (int16_t)targetMm;
         if (abs(error) <= APPROACH_TOL_MM) {
             res.ok = true;
             return res;
         }
         const int8_t dir = error > 0 ? 1 : -1;  // lejos: adelante; muy cerca: atrás
         // Frena un poco antes, por lo que sigue andando después de cortar los motores.
-        const uint16_t stopAtMm = dir > 0 ? APPROACH_TARGET_MM + APPROACH_COAST_MM
-                                          : APPROACH_TARGET_MM - APPROACH_COAST_MM;
+        const uint16_t stopAtMm = dir > 0 ? targetMm + APPROACH_COAST_MM
+                                          : targetMm - APPROACH_COAST_MM;
 
         driveStraight(dir);
         const uint32_t start = millis();
@@ -543,7 +550,7 @@ ApproachResult approachTarget(uint16_t objMm) {
         }
     }
     res.ok = res.finalMm != 0 &&
-             abs((int16_t)res.finalMm - (int16_t)APPROACH_TARGET_MM) <= APPROACH_TOL_MM;
+             abs((int16_t)res.finalMm - (int16_t)targetMm) <= APPROACH_TOL_MM;
     return res;
 }
 
