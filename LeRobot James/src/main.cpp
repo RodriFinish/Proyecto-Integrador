@@ -36,7 +36,7 @@ constexpr float TARGET_WIDTH_MM = 50.0f;       // diámetro del objeto a buscar 
 
 // --- Giro (MEDIR: girar 360° con SCAN_PWM, cronometrar t, ω = 360 / t) ---
 constexpr int SCAN_PWM = 150;
-constexpr float TURN_RATE_DEG_PER_S = 21.0f;   // aprox.: una vuelta en ~17 s (cronometrado a ojo, falta medir bien)
+constexpr float TURN_RATE_DEG_PER_S = 40.0f;   // una vuelta en 9 s (cronometrado el 25/11; antes 21 = ~17 s)
 
 // --- Geometría del robot (MEDIR) ---
 constexpr float SENSOR_OFFSET_MM = 100.0f;     // del eje de giro al sensor
@@ -44,7 +44,7 @@ constexpr float SENSOR_OFFSET_MM = 100.0f;     // del eje de giro al sensor
 // --- Cono del VL53L0X (CALIBRAR) ---
 // 0 = solo geometría. El cono hace que el objeto dure más medidas de las que da la fórmula.
 // Calibrar con una corrida: CONE_DEG = medidas reales × DEG_PER_SAMPLE − ángulo geométrico.
-constexpr float CONE_DEG = 8.0f;               // de la prueba del 9/11: base a ~68 cm duró 20-26 medidas (40/s)
+constexpr float CONE_DEG = 23.0f;              // 25/11: el aro duró 14 medidas (40 °/s, 20/s) -> 28° - 4,8° geométrico a 50 cm
 
 // --- Frecuencia del sensor ---
 // 20 ms es el tiempo de medición mínimo del VL53L0X (modo rápido). Con 33 ms / 40 ms
@@ -99,6 +99,9 @@ constexpr int16_t CENTER_COAST_MS = 0;
 // y el objeto sale del cono, lo detecta por el salto de distancia y se detiene.
 constexpr uint16_t APPROACH_TARGET_MM = 500;   // 50 cm, medidos desde el sensor
 constexpr uint16_t APPROACH_TOL_MM = 20;       // aceptado: ±2 cm
+// CALIBRAR: si arrancó más cerca que el objetivo y tiene que alejarse, queda un poco corto;
+// en ese caso el objetivo pasa a ser APPROACH_TARGET_MM + esto (alejándose, 5 cm más).
+constexpr uint16_t APPROACH_BACK_EXTRA_MM = 50;
 // CALIBRAR: lo que sigue andando después de frenar (si queda más cerca de 40 cm, subir).
 constexpr uint16_t APPROACH_COAST_MM = 30;
 // CALIBRAR: si al avanzar se va hacia un lado, bajar el PWM de la rueda contraria.
@@ -497,16 +500,20 @@ ApproachResult approachTarget(uint16_t objMm) {
     if (res.finalMm == 0 || startDiff > APPROACH_START_TOL_MM) {
         return res;  // no está mirando el objeto: no moverse
     }
+    // Si tiene que alejarse, apunta a quedar APPROACH_BACK_EXTRA_MM más lejos.
+    const uint16_t targetMm = res.finalMm + APPROACH_TOL_MM < APPROACH_TARGET_MM
+                                  ? APPROACH_TARGET_MM + APPROACH_BACK_EXTRA_MM
+                                  : APPROACH_TARGET_MM;
     for (uint8_t attempt = 0; attempt < APPROACH_TRIES && res.finalMm != 0; ++attempt) {
-        const int16_t error = (int16_t)res.finalMm - (int16_t)APPROACH_TARGET_MM;
+        const int16_t error = (int16_t)res.finalMm - (int16_t)targetMm;
         if (abs(error) <= APPROACH_TOL_MM) {
             res.ok = true;
             return res;
         }
         const int8_t dir = error > 0 ? 1 : -1;  // lejos: adelante; muy cerca: atrás
         // Frena un poco antes, por lo que sigue andando después de cortar los motores.
-        const uint16_t stopAtMm = dir > 0 ? APPROACH_TARGET_MM + APPROACH_COAST_MM
-                                          : APPROACH_TARGET_MM - APPROACH_COAST_MM;
+        const uint16_t stopAtMm = dir > 0 ? targetMm + APPROACH_COAST_MM
+                                          : targetMm - APPROACH_COAST_MM;
 
         driveStraight(dir);
         const uint32_t start = millis();
@@ -543,7 +550,7 @@ ApproachResult approachTarget(uint16_t objMm) {
         }
     }
     res.ok = res.finalMm != 0 &&
-             abs((int16_t)res.finalMm - (int16_t)APPROACH_TARGET_MM) <= APPROACH_TOL_MM;
+             abs((int16_t)res.finalMm - (int16_t)targetMm) <= APPROACH_TOL_MM;
     return res;
 }
 
